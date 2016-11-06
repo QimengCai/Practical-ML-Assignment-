@@ -1,0 +1,186 @@
+---
+title: "Practical Machine Learning Project"
+name: QM
+Date: 2016-11-06
+output: html_document
+---
+
+# Background
+
+One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants.
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement – a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: http://groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset).
+
+# Data Source 
+
+The training data for this project are available here: [https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv]
+
+The test data are available here: [https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv]
+
+The data for this project come from this source: [http://groupware.les.inf.puc-rio.br/har]. If you use the document you create for this class for any purpose please cite them as they have been very generous in allowing their data to be used for this kind of assignment.
+
+# Objective 
+
+The goal of this project is to predict the manner in which they did the exercise. This is the "classe" variable in the training set. You may use any of the other variables to predict with. You should create a report describing how you built your model, how you used cross validation, what you think the expected out of sample error is, and why you made the choices you did. You will also use your prediction model to predict 20 different test cases.
+
+# Methodology 
+
+## Step 1 : Import the Data
+
+```{r}
+train_data_url <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+test_data_url <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+
+training <- read.csv(url(train_data_url), na.strings=c("NA","#DIV/0!",""))
+testing <- read.csv(url(test_data_url), na.strings=c("NA","#DIV/0!",""))
+```
+
+## Step 2: Data Exploration
+
+```{r, echo=FALSE}
+summary(training)
+str(training)
+head(training)
+str(testing)
+```
+
+## Step 3: Data Cleaning
+
+
+### 1) check the class of each variables 
+
+```{r}
+
+# remove those variables which I won't use in the model 
+
+
+training_data <- training[, !names(training) %in% c("X", "user_name","raw_timestamp_part_1", "raw_timestamp_part_2", "cvtd_timestamp")]
+
+# change new_window into numeric which can be used be the model
+training_data$new_window <- ifelse(training_data$new_window == "yes",1,0)
+
+
+```
+
+### 2) replace the NA or null value with 0
+
+
+```{r}
+# build a function that will allow us to change the NA to any value 
+na_fuction <- function(data, value) { 
+  data[which(is.null(data)| is.na(data))] <- value
+  return(data)
+}
+
+# replace the NA with 0 in this case
+training_data <- as.data.frame(apply(training_data[, -156], 2, FUN= na_fuction, value = 0))
+training_data$classe <- training$classe
+
+
+```
+
+## Step 4: Data Partitioning 
+
+```{r}
+
+library('caret') 
+
+# Split training data and testing data (0.7/0.3)
+
+datapartition <- createDataPartition(training_data$classe, time = 1, p = 0.7, list = F)
+training_data_1 <- training_data[datapartition,]
+testing_data_1 <- training_data[-datapartition,]
+
+# Check the distribution of the dependant variable
+
+prop.table(table(training_data_1$classe))
+prop.table(table(testing_data_1$classe))
+
+
+```
+
+## Step 5 : Feature Selection 
+
+
+### 1) remove 0 variance variables 
+
+```{r}
+nearzero_var <- nearZeroVar(training_data_1)
+training_data_2 <- training_data_1[, -nearzero_var]
+```
+
+### 2) # Applying Winzorization at 98% percentile for training dataset
+
+```{r}
+# change the type of the variables in training dataset
+
+training_data_2[, c(1:53)] <- sapply(training_data_2[, c(1:53)], as.numeric)
+
+# build a function to treat the outlier
+
+outlier_treatment <- function(data, q) { 
+  extrema <- quantile(data, c(q),na.rm=T)  
+  data[which(data > extrema[1] | is.na(data))] <- extrema[1]
+  return(data)
+}
+
+
+training_data_3 <- as.data.frame(apply(training_data_2[,!names(training_data_2) == "classe"],2, outlier_treatment,q=0.98))
+training_data_3$classe <- training_data_2$classe
+
+
+```
+
+### 3) Check the collinearity amongs the variables in training dataset
+
+```{r}
+
+# create a correlation matrix
+corr_matrix <- cor(training_data_3[-54])
+
+# remove those variables with a coefficience of more than 0.75
+correlated_variables <- findCorrelation(corr_matrix, .75)
+
+#final train data for modelling
+modelling_data <- training_data_3[,-correlated_variables]
+
+```
+
+### 4) make sure testing dataset has the exact variables as training set 
+
+```{r}
+testing_data_1 <- testing_data_1[, colnames(testing_data_1) %in% colnames(modelling_data)]
+testing_data_1[, c(1:44)] <- sapply(testing_data_1[, c(1:44)], as.numeric)
+```
+
+## Step 6: Model Building
+
+### 1)  model_1 : decision tree model
+
+```{r}
+rpart_model <- train( classe ~., data = modelling_data, method = 'rpart')
+
+rpart_pred <- predict(rpart_model, newdata = testing_data_1[,-45])
+
+confusionMatrix(rpart_pred, testing_data_1$classe)
+```
+
+### 2) model_2 : random forest model 
+
+```{r}
+library('randomForest')
+rf_model <-randomForest(classe~., data= modelling_data,ntree=500,importance=TRUE)
+rf_pred <- predict(rf_model, newdata = testing_data_1[,-45])
+confusionMatrix(rf_pred, testing_data_1$classe)
+```
+
+
+Random Forests yielded better Results.
+
+## Step 7: Prediction on testing dataset
+
+```{r}
+Final_predictions <- predict(rf_model, newdata = testing)
+Final_predictions
+```
+
